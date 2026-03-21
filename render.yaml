@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: tracker-integratori
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: ADMIN_SECRET
+        generateValue: true
+      - key: DB_PATH
+        value: /opt/render/project/src/integratori.db
+    disk:
+      name: db
+      mountPath: /opt/render/project/src
+      sizeGB: 1

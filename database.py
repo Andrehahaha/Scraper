@@ -255,5 +255,8 @@ def storico_prezzi_prodotto(neg: str, nome: str, limite: int = 50) -> list:
 def get_conn():
     return sqlite3.connect(DB_PATH)
 
-
+def negozi_disponibili() -> list:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT DISTINCT negozio FROM prodotti").fetchall()
+    return [r[0] for r in rows]
 init_db()

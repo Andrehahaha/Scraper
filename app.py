@@ -4,8 +4,8 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from contextlib import asynccontextmanager
 import os
 import threading
-import database
-import scraper
+import server.database as database
+import server.scraper as scraper
 
 scheduler = BackgroundScheduler()
 
@@ -108,6 +108,9 @@ def get_storico_prezzi(
     storico = database.storico_prezzi_prodotto(negozio, nome, limite)
     return {"negozio": negozio, "nome": nome, "storico": storico, "totale": len(storico)}
 
+@app.get("/health")
+def health():
+    return {"ok": True}
 
 @app.post("/api/aggiorna")
 def forza_aggiornamento(secret: str = Query(...)):

@@ -108,7 +108,7 @@ def get_storico_prezzi(
     storico = database.storico_prezzi_prodotto(negozio, nome, limite)
     return {"negozio": negozio, "nome": nome, "storico": storico, "totale": len(storico)}
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health():
     return {"ok": True}
 

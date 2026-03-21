@@ -4,8 +4,8 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from contextlib import asynccontextmanager
 import os
 import threading
-import server.database as database
-import server.scraper as scraper
+import database
+import scraper
 
 scheduler = BackgroundScheduler()
 

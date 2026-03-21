@@ -1,0 +1,6 @@
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+apscheduler==3.10.4
+requests==2.32.3
+beautifulsoup4==4.12.3
+curl-cffi==0.7.3

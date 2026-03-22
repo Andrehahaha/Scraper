@@ -7,7 +7,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from contextlib import asynccontextmanager
 import database
 import scraper
-import telegram_bot
+import notifiche
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("tracker")
@@ -31,7 +31,7 @@ def job_giornaliero():
         # Flash sale
         flash = database.flash_sale(soglia_calo=FLASH_SOGLIA, ore=25)
         if flash:
-            telegram_bot.notifica_flash_sale(flash)
+            notifiche.controlla_flash_sale()
 
         # Notifiche wishlist
         _controlla_wishlist()
@@ -41,7 +41,7 @@ def job_giornaliero():
             for n, cfg in scraper.NEGOZI.items()
             for c in cfg["categorie"]
         )
-        telegram_bot.notifica_aggiornamento_completato(tot, len(flash))
+        notifiche.controlla_wishlist()
         log.info(f"✅ Aggiornamento completato — {tot} prodotti, {len(flash)} flash sale")
     except Exception as e:
         log.error(f"❌ Errore aggiornamento: {e}")
@@ -55,7 +55,7 @@ def _controlla_wishlist():
             if p["target_raggiunto"] and p.get("prezzo_target"):
                 tipo = "target"
                 if not database.alert_gia_inviato(p["negozio"], p["nome"], tipo, ore=23):
-                    telegram_bot.notifica_prezzo_target(
+                    notifiche._send(
                         p["nome"], p["negozio"],
                         p.get("prezzo", "N/D"), p["prezzo_target"],
                         p.get("link", "")

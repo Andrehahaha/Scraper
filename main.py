@@ -1,7 +1,7 @@
 import flet as ft
 import threading
-from server.scraper import NEGOZI, CATEGORIE, ottieni_tutte_categorie
-from server.database import (
+from scraper import NEGOZI, CATEGORIE, ottieni_tutte_categorie
+from database import (
     carica_categoria,
     offerte_convenienti,
     ultimo_aggiornamento,
@@ -411,10 +411,8 @@ def main(page: ft.Page):
 
     # ── AGGIORNA: tutti i negozi in sequenza ─────────────────
     def aggiorna_negozio(e):
-        negozi_da_aggiornare = (
-            list(NEGOZI.keys()) if stato["negozio"] == "Tutti"
-            else [stato["negozio"]]
-        )
+        # Aggiorna sempre tutti i negozi in sequenza
+        negozi_da_aggiornare = list(NEGOZI.keys())
         bottone_aggiorna.disabled = True
         progress_bar.visible = True
         progress_bar.value = None

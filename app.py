@@ -7,7 +7,13 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from contextlib import asynccontextmanager
 import database
 import scraper
-import notifiche
+
+# notifiche opzionale — non crasha se manca
+try:
+    import notifiche
+    _notifiche_ok = True
+except ImportError:
+    _notifiche_ok = False
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("tracker")
@@ -15,7 +21,7 @@ log = logging.getLogger("tracker")
 scheduler    = BackgroundScheduler(daemon=True)
 ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "cambia_questa_password")
 UPDATE_HOUR  = int(os.environ.get("UPDATE_HOUR", "3"))
-FLASH_SOGLIA = int(os.environ.get("FLASH_SOGLIA", "20"))  # calo minimo % per flash sale
+FLASH_SOGLIA = int(os.environ.get("FLASH_SOGLIA", "20"))
 
 
 def job_giornaliero():
@@ -26,12 +32,17 @@ def job_giornaliero():
             for categoria in cfg["categorie"]:
                 prodotti = scraper.scrapa_categoria(negozio, categoria)
                 variazioni = database.salva_categoria(negozio, categoria, prodotti)
-                tutte_variazioni.extend(variazioni)
+                if isinstance(variazioni, list):
+                    tutte_variazioni.extend(variazioni)
 
         # Flash sale
-        flash = database.flash_sale(soglia_calo=FLASH_SOGLIA, ore=25)
-        if flash:
-            notifiche.controlla_flash_sale()
+        try:
+            flash = database.flash_sale(soglia_calo=FLASH_SOGLIA, ore=25)
+            if flash and _notifiche_ok:
+                notifiche.controlla_flash_sale()
+        except Exception as e:
+            log.warning(f"flash_sale skip: {e}")
+            flash = []
 
         # Notifiche wishlist
         _controlla_wishlist()
@@ -41,28 +52,33 @@ def job_giornaliero():
             for n, cfg in scraper.NEGOZI.items()
             for c in cfg["categorie"]
         )
-        notifiche.controlla_wishlist()
+        if _notifiche_ok:
+            try:
+                notifiche.controlla_wishlist()
+            except Exception as e:
+                log.warning(f"notifiche wishlist skip: {e}")
+
         log.info(f"✅ Aggiornamento completato — {tot} prodotti, {len(flash)} flash sale")
     except Exception as e:
         log.error(f"❌ Errore aggiornamento: {e}")
 
 
 def _controlla_wishlist():
-    """Manda notifiche Telegram per i prodotti in wishlist che hanno raggiunto il target."""
     try:
         wishlist = database.carica_wishlist()
         for p in wishlist:
-            if p["target_raggiunto"] and p.get("prezzo_target"):
+            if p.get("target_raggiunto") and p.get("prezzo_target"):
                 tipo = "target"
                 if not database.alert_gia_inviato(p["negozio"], p["nome"], tipo, ore=23):
-                    notifiche._send(
-                        p["nome"], p["negozio"],
-                        p.get("prezzo", "N/D"), p["prezzo_target"],
-                        p.get("link", "")
-                    )
+                    if _notifiche_ok:
+                        notifiche._send(
+                            p["nome"], p["negozio"],
+                            p.get("prezzo", "N/D"), p["prezzo_target"],
+                            p.get("link", "")
+                        )
                     database.registra_alert(p["negozio"], p["nome"], tipo)
     except Exception as e:
-        log.error(f"Errore controllo wishlist: {e}")
+        log.warning(f"_controlla_wishlist skip: {e}")
 
 
 @asynccontextmanager
@@ -84,10 +100,10 @@ async def lifespan(app: FastAPI):
             try:
                 ultimo_dt = datetime.strptime(ult[:16], "%Y-%m-%d %H:%M")
                 if ultimo_dt.date() < ora.date():
-                    log.info("⏰ Aggiornamento notturno mancato — eseguo ora...")
+                    log.info("⏰ Aggiornamento mancato — eseguo ora...")
                     job_giornaliero()
             except Exception as e:
-                log.warning(f"Errore controllo data: {e}")
+                log.warning(f"Errore check data: {e}")
 
     threading.Thread(target=_controlla_aggiornamento_mancato, daemon=True).start()
     yield
@@ -98,18 +114,19 @@ app = FastAPI(title="Tracker Integratori API", version="2.0.0", lifespan=lifespa
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
-@app.get("/")
+# HEAD aggiunto per UptimeRobot (piano free usa HEAD)
+@app.api_route("/", methods=["GET", "HEAD"])
 def root():
     job = scheduler.get_job("daily")
     prossimo = str(job.next_run_time)[:16] if job and job.next_run_time else "N/D"
     return {"status": "ok", "ultimo_aggiornamento": database.ultimo_aggiornamento(),
             "prossimo_aggiornamento": prossimo, "negozi": database.negozi_disponibili()}
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health():
     return {"ok": True}
 
-@app.get("/ping")
+@app.api_route("/ping", methods=["GET", "HEAD"])
 def ping():
     return {"status": "alive"}
 
@@ -138,13 +155,14 @@ def get_offerte(soglia: int = Query(default=0, ge=0, le=100),
 
 @app.get("/api/flash")
 def get_flash(soglia: int = Query(default=20), ore: int = Query(default=24)):
-    """Flash sale: prodotti calati di almeno soglia% nelle ultime ore."""
-    return {"prodotti": database.flash_sale(soglia, ore)}
+    try:
+        return {"prodotti": database.flash_sale(soglia_calo=soglia, ore=ore)}
+    except Exception:
+        return {"prodotti": database.offerte_convenienti(soglia)}
 
 @app.get("/api/storico/{negozio}/{nome}")
 def get_storico(negozio: str, nome: str, limite: int = Query(default=30)):
-    storico = database.storico_prezzi_prodotto(negozio, nome, limite)
-    return {"storico": storico}
+    return {"storico": database.storico_prezzi_prodotto(negozio, nome, limite)}
 
 @app.get("/api/aggiornamento")
 def get_aggiornamento():
@@ -160,10 +178,13 @@ def forza_aggiornamento(secret: str = Query(...)):
     threading.Thread(target=job_giornaliero, daemon=True).start()
     return {"status": "aggiornamento avviato"}
 
-# ── WISHLIST ──────────────────────────────────────────────────
+# ── WISHLIST ─────────────────────────────────────────────────
 @app.get("/api/wishlist")
 def get_wishlist():
-    return {"prodotti": database.carica_wishlist()}
+    try:
+        return {"prodotti": database.carica_wishlist()}
+    except Exception:
+        return {"prodotti": []}
 
 @app.post("/api/wishlist")
 def add_wishlist(negozio: str, categoria: str, nome: str,
@@ -171,11 +192,17 @@ def add_wishlist(negozio: str, categoria: str, nome: str,
                  prezzo_attuale: str = Query(default=""),
                  immagine: str = Query(default=""),
                  link: str = Query(default="")):
-    database.aggiungi_wishlist(negozio, categoria, nome, prezzo_target,
-                                prezzo_attuale, immagine, link)
+    try:
+        database.aggiungi_wishlist(negozio, categoria, nome, prezzo_target,
+                                    prezzo_attuale, immagine, link)
+    except Exception as e:
+        raise HTTPException(500, str(e))
     return {"status": "aggiunto"}
 
 @app.delete("/api/wishlist")
 def del_wishlist(negozio: str, nome: str):
-    database.rimuovi_wishlist(negozio, nome)
+    try:
+        database.rimuovi_wishlist(negozio, nome)
+    except Exception as e:
+        raise HTTPException(500, str(e))
     return {"status": "rimosso"}

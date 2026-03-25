@@ -10,7 +10,7 @@ import io
 # Fix encoding Windows console
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
-from database import storico_variazioni, variazioni_per_marca, negozi_nel_db
+from server.database import storico_variazioni, variazioni_per_marca, negozi_nel_db
 
 # Icone ASCII per compatibilità Windows
 ICON_DOWN = "[DOWN]"

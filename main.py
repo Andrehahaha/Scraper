@@ -374,7 +374,7 @@ def main(page: ft.Page):
         ]))
         if not neg:
             grafici_ui.controls.append(_bar("Prodotti per negozio",
-                stats_prodotti_per_negozio(),colore_barre="#5C6BC0",onclick=lambda n:_vai_a(negozio=n)))
+                stats_prodotti_per_negozio(),colore="#5C6BC0",onclick=lambda n:_vai_a(negozio=n)))
         grafici_ui.controls.append(_bar("Sconto medio per categoria (%)",
             stats_sconto_medio_per_categoria(neg),colore="#FF9800",unita="%",max_v=100,
             onclick=lambda c:_vai_a(categoria=c)))

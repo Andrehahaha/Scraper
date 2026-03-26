@@ -56,6 +56,43 @@ La password si trova nelle variabili d'ambiente su Render (ADMIN_SECRET).
 
 ---
 
+## 5. Bot Telegram (notifiche + comandi)
+
+Imposta su Render queste variabili:
+
+- `TELEGRAM_BOT_TOKEN` = token del bot creato con @BotFather
+- `TELEGRAM_CHAT_ID` = opzionale, chat fissa legacy
+- `TELEGRAM_POLL_SECONDS` = intervallo polling comandi (default `60`)
+- `SOGLIA_FLASH_SALE` = soglia flash in % (default `20`)
+
+Comandi supportati nel bot:
+
+- `/start` abilita notifiche per la chat
+- `/stop` disabilita notifiche
+- `/status` stato database/scraper
+- `/flash` top flash sale
+- `/help` aiuto
+
+Test rapido invio messaggio Telegram:
+
+`POST /api/telegram/test?secret=LA_TUA_PASSWORD&msg=Test%20ok`
+
+---
+
+## 6. Grafico prezzi reale (PNG)
+
+Endpoint API:
+
+`GET /api/grafico/{negozio}/{nome}?limite=30`
+
+Esempio:
+
+`https://tuo-server.onrender.com/api/grafico/Tsunami/ISO%20WHEY%20908g`
+
+Restituisce un'immagine PNG con andamento storico del prezzo.
+
+---
+
 ## Aggiungere Prozis/Bulk/MyProtein
 
 Questi siti usano JavaScript per caricare i prodotti.

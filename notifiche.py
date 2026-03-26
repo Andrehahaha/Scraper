@@ -1,34 +1,196 @@
-"""
-Modulo notifiche Telegram + alert flash sale.
-Configura sul server Render le variabili:
-  TELEGRAM_BOT_TOKEN  = token del bot (da @BotFather)
-  TELEGRAM_CHAT_ID    = il tuo chat_id (da @userinfobot)
-  SOGLIA_FLASH_SALE   = calo % minimo per alert (default 20)
+"""Notifiche Telegram + bot commands via long polling.
+
+Variabili ambiente:
+  TELEGRAM_BOT_TOKEN   token bot (BotFather)
+  TELEGRAM_CHAT_ID     chat predefinita opzionale (compatibilità)
+  SOGLIA_FLASH_SALE    soglia calo % flash sale (default 20)
 """
 import os
-import requests
 import logging
-from database import get_conn
+from datetime import datetime
+
+import requests
+
+from database import flash_sale, get_conn
 
 log = logging.getLogger("notifiche")
 
-BOT_TOKEN  = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-CHAT_ID    = os.environ.get("TELEGRAM_CHAT_ID", "")
+BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 SOGLIA_FLASH = int(os.environ.get("SOGLIA_FLASH_SALE", "20"))
 
+_BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
+_OFFSET = 0
 
-def _send(testo: str):
-    if not BOT_TOKEN or not CHAT_ID:
-        log.warning("Telegram non configurato — skip notifica")
+
+def _ensure_tables():
+    with get_conn() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS telegram_subscribers (
+                chat_id TEXT PRIMARY KEY,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                registered_il TEXT NOT NULL
+            )
+        """)
+        conn.commit()
+
+
+def _telegram_ok() -> bool:
+    return bool(BOT_TOKEN)
+
+
+def _register_chat(chat_id: str):
+    _ensure_tables()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO telegram_subscribers (chat_id, enabled, registered_il)
+            VALUES (?, 1, ?)
+            ON CONFLICT(chat_id) DO UPDATE SET enabled=1
+            """,
+            (chat_id, now),
+        )
+        conn.commit()
+
+
+def _disable_chat(chat_id: str):
+    _ensure_tables()
+    with get_conn() as conn:
+        conn.execute("UPDATE telegram_subscribers SET enabled=0 WHERE chat_id=?", (chat_id,))
+        conn.commit()
+
+
+def _active_chat_ids() -> list:
+    ids = []
+    if CHAT_ID:
+        ids.append(str(CHAT_ID))
+    _ensure_tables()
+    with get_conn() as conn:
+        rows = conn.execute("SELECT chat_id FROM telegram_subscribers WHERE enabled=1").fetchall()
+    ids.extend(str(r[0]) for r in rows)
+    return list(dict.fromkeys(ids))
+
+
+def _send_to_chat(chat_id: str, testo: str):
+    if not _telegram_ok():
         return
     try:
         requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            json={"chat_id": CHAT_ID, "text": testo, "parse_mode": "HTML"},
+            f"{_BASE_URL}/sendMessage",
+            json={"chat_id": chat_id, "text": testo, "parse_mode": "HTML"},
             timeout=10,
         )
     except Exception as e:
-        log.error(f"Telegram error: {e}")
+        log.error(f"Telegram sendMessage error: {e}")
+
+
+def _send(testo: str):
+    send_to_all(testo)
+
+
+def send_to_all(testo: str):
+    if not _telegram_ok():
+        return
+    for chat_id in _active_chat_ids():
+        _send_to_chat(chat_id, testo)
+
+
+def notifica_target_raggiunto(nome: str, negozio: str, prezzo_attuale: str, prezzo_target: str, link: str = ""):
+    msg = (
+        "🎯 <b>Prezzo target raggiunto</b>\n"
+        f"🏪 {negozio}\n"
+        f"📦 {nome}\n"
+        f"💰 {prezzo_attuale} (target: {prezzo_target})"
+    )
+    if link:
+        msg += f"\n🔗 {link}"
+    send_to_all(msg)
+
+
+def invia_report_aggiornamento(tot_prodotti: int, flash_count: int):
+    msg = (
+        "✅ <b>Aggiornamento scraper completato</b>\n"
+        f"📦 Prodotti disponibili: {tot_prodotti}\n"
+        f"⚡ Flash sale trovati: {flash_count}"
+    )
+    send_to_all(msg)
+
+
+def _bot_status_text() -> str:
+    with get_conn() as conn:
+        tot_prodotti = conn.execute("SELECT COUNT(*) FROM prodotti").fetchone()[0]
+        tot_wishlist = conn.execute("SELECT COUNT(*) FROM wishlist").fetchone()[0]
+        ultimo = conn.execute("SELECT MAX(aggiornato_il) FROM prodotti").fetchone()[0] or "N/D"
+    return (
+        "📊 <b>Stato tracker</b>\n"
+        f"📦 Prodotti: {tot_prodotti}\n"
+        f"💾 Wishlist: {tot_wishlist}\n"
+        f"🕒 Ultimo update: {str(ultimo)[:16]}"
+    )
+
+
+def _bot_flash_text() -> str:
+    flash = flash_sale(soglia_calo=SOGLIA_FLASH, ore=25)
+    if not flash:
+        return "⚡ Nessun flash sale al momento."
+    top = flash[:5]
+    righe = ["⚡ <b>Flash sale</b>"]
+    for p in top:
+        righe.append(f"• {p['nome'][:45]} — -{p['calo_percentuale']}% ({p['prezzo_corrente']})")
+    return "\n".join(righe)
+
+
+def _help_text() -> str:
+    return (
+        "🤖 <b>Comandi disponibili</b>\n"
+        "/start — abilita notifiche\n"
+        "/stop — disabilita notifiche\n"
+        "/status — stato scraper\n"
+        "/flash — top flash sale\n"
+        "/help — aiuto"
+    )
+
+
+def poll_bot_updates():
+    global _OFFSET
+    if not _telegram_ok():
+        return
+    try:
+        r = requests.get(
+            f"{_BASE_URL}/getUpdates",
+            params={"offset": _OFFSET + 1, "timeout": 0, "allowed_updates": ["message"]},
+            timeout=12,
+        )
+        data = r.json()
+        if not data.get("ok"):
+            return
+        for upd in data.get("result", []):
+            _OFFSET = max(_OFFSET, int(upd.get("update_id", 0)))
+            msg = upd.get("message") or {}
+            chat = msg.get("chat") or {}
+            chat_id = str(chat.get("id", "")).strip()
+            testo = (msg.get("text") or "").strip().lower()
+            if not chat_id or not testo.startswith("/"):
+                continue
+
+            if testo.startswith("/start"):
+                _register_chat(chat_id)
+                _send_to_chat(chat_id, "✅ Bot attivo. Riceverai notifiche su prezzi e flash sale.")
+            elif testo.startswith("/stop"):
+                _disable_chat(chat_id)
+                _send_to_chat(chat_id, "⏸ Notifiche disattivate. Usa /start per riattivarle.")
+            elif testo.startswith("/status"):
+                _register_chat(chat_id)
+                _send_to_chat(chat_id, _bot_status_text())
+            elif testo.startswith("/flash"):
+                _register_chat(chat_id)
+                _send_to_chat(chat_id, _bot_flash_text())
+            elif testo.startswith("/help"):
+                _register_chat(chat_id)
+                _send_to_chat(chat_id, _help_text())
+    except Exception as e:
+        log.warning(f"poll_bot_updates skip: {e}")
 
 
 # ── WISHLIST / ALERT PREZZI ─────────────────────────────────
@@ -102,7 +264,7 @@ def controlla_wishlist():
             continue
 
         if prezzo_val <= target:
-            _send(
+            send_to_all(
                 f"🎯 <b>Prezzo target raggiunto!</b>\n"
                 f"🏪 {negozio}\n"
                 f"📦 {nome}\n"
@@ -142,7 +304,7 @@ def controlla_flash_sale():
                 continue
             calo_pct = (vecchio - corrente) / vecchio * 100
             if calo_pct >= SOGLIA_FLASH:
-                _send(
+                send_to_all(
                     f"🚨 <b>Flash Sale!</b>\n"
                     f"🏪 {negozio}\n"
                     f"📦 {nome}\n"

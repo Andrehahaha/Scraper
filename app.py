@@ -2,11 +2,20 @@ import os
 import threading
 import logging
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.background import BackgroundScheduler
 from contextlib import asynccontextmanager
 import database
 import scraper
+
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    _matplotlib_ok = True
+except Exception:
+    _matplotlib_ok = False
 
 # notifiche opzionale — non crasha se manca
 try:
@@ -22,6 +31,16 @@ scheduler    = BackgroundScheduler(daemon=True)
 ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "cambia_questa_password")
 UPDATE_HOUR  = int(os.environ.get("UPDATE_HOUR", "3"))
 FLASH_SOGLIA = int(os.environ.get("FLASH_SOGLIA", "20"))
+TELEGRAM_POLL_SECONDS = int(os.environ.get("TELEGRAM_POLL_SECONDS", "60"))
+
+
+def _parse_prezzo_to_float(val: str):
+    if not val:
+        return None
+    try:
+        return float(str(val).replace("€", "").replace(",", ".").replace("\xa0", "").strip())
+    except Exception:
+        return None
 
 
 def job_giornaliero():
@@ -58,6 +77,11 @@ def job_giornaliero():
             except Exception as e:
                 log.warning(f"notifiche wishlist skip: {e}")
 
+            try:
+                notifiche.invia_report_aggiornamento(tot_prodotti=tot, flash_count=len(flash))
+            except Exception as e:
+                log.warning(f"notifiche report skip: {e}")
+
         log.info(f"✅ Aggiornamento completato — {tot} prodotti, {len(flash)} flash sale")
     except Exception as e:
         log.error(f"❌ Errore aggiornamento: {e}")
@@ -71,10 +95,12 @@ def _controlla_wishlist():
                 tipo = "target"
                 if not database.alert_gia_inviato(p["negozio"], p["nome"], tipo, ore=23):
                     if _notifiche_ok:
-                        notifiche._send(
-                            p["nome"], p["negozio"],
-                            p.get("prezzo", "N/D"), p["prezzo_target"],
-                            p.get("link", "")
+                        notifiche.notifica_target_raggiunto(
+                            nome=p["nome"],
+                            negozio=p["negozio"],
+                            prezzo_attuale=p.get("prezzo", "N/D"),
+                            prezzo_target=p["prezzo_target"],
+                            link=p.get("link", ""),
                         )
                     database.registra_alert(p["negozio"], p["nome"], tipo)
     except Exception as e:
@@ -85,6 +111,14 @@ def _controlla_wishlist():
 async def lifespan(app: FastAPI):
     scheduler.add_job(job_giornaliero, "cron", hour=UPDATE_HOUR, minute=0,
                       id="daily", replace_existing=True)
+    if _notifiche_ok:
+        scheduler.add_job(
+            notifiche.poll_bot_updates,
+            "interval",
+            seconds=max(15, TELEGRAM_POLL_SECONDS),
+            id="telegram-poll",
+            replace_existing=True,
+        )
     scheduler.start()
     log.info(f"⏰ Scheduler attivo — ogni giorno alle {UPDATE_HOUR:02d}:00")
 
@@ -164,6 +198,48 @@ def get_flash(soglia: int = Query(default=20), ore: int = Query(default=24)):
 def get_storico(negozio: str, nome: str, limite: int = Query(default=30)):
     return {"storico": database.storico_prezzi_prodotto(negozio, nome, limite)}
 
+@app.get("/api/grafico/{negozio}/{nome}")
+def get_grafico_prodotto(negozio: str, nome: str, limite: int = Query(default=30, ge=3, le=180)):
+    if not _matplotlib_ok:
+        raise HTTPException(503, "matplotlib non disponibile")
+
+    storico = list(reversed(database.storico_prezzi_prodotto(negozio, nome, limite)))
+    if not storico:
+        raise HTTPException(404, "Storico non disponibile per questo prodotto")
+
+    punti = []
+    labels = []
+    for s in storico:
+        prezzo = _parse_prezzo_to_float(s.get("prezzo_corrente"))
+        data = (s.get("data") or "")[:16]
+        if prezzo is None:
+            continue
+        punti.append(prezzo)
+        labels.append(data)
+
+    if len(punti) < 2:
+        raise HTTPException(404, "Dati insufficienti per generare il grafico")
+
+    fig, ax = plt.subplots(figsize=(10, 3.6), dpi=130)
+    ax.plot(range(len(punti)), punti, marker="o", linewidth=2)
+    ax.fill_between(range(len(punti)), punti, [min(punti)] * len(punti), alpha=0.15)
+    ax.set_title(f"Andamento prezzo - {nome}")
+    ax.set_xlabel("Rilevazioni")
+    ax.set_ylabel("Prezzo (€)")
+    step = max(1, len(labels) // 6)
+    ticks = list(range(0, len(labels), step))
+    ax.set_xticks(ticks)
+    ax.set_xticklabels([labels[i] for i in ticks], rotation=25, ha="right", fontsize=8)
+    ax.grid(alpha=0.25)
+    fig.tight_layout()
+
+    from io import BytesIO
+    buf = BytesIO()
+    fig.savefig(buf, format="png")
+    plt.close(fig)
+    buf.seek(0)
+    return Response(content=buf.getvalue(), media_type="image/png")
+
 @app.get("/api/aggiornamento")
 def get_aggiornamento():
     job = scheduler.get_job("daily")
@@ -177,6 +253,18 @@ def forza_aggiornamento(secret: str = Query(...)):
         raise HTTPException(403, "Secret non valido")
     threading.Thread(target=job_giornaliero, daemon=True).start()
     return {"status": "aggiornamento avviato"}
+
+@app.api_route("/api/telegram/test", methods=["GET", "POST"])
+def telegram_test(secret: str = Query(...), msg: str = Query(default="✅ Test Telegram dal tracker")):
+    if secret != ADMIN_SECRET:
+        raise HTTPException(403, "Secret non valido")
+    if not _notifiche_ok:
+        raise HTTPException(503, "Modulo notifiche non disponibile")
+    try:
+        notifiche.send_to_all(msg)
+    except Exception as e:
+        raise HTTPException(500, f"Errore invio Telegram: {e}")
+    return {"status": "ok", "messaggio": msg}
 
 # ── WISHLIST ─────────────────────────────────────────────────
 @app.get("/api/wishlist")

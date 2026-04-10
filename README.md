@@ -1,102 +1,79 @@
-# Tracker Integratori — Guida Deploy
+# Tracker Integratori - Backend API
 
-## Struttura
-```
-server/   → va su Render.com (gratis)
-mobile/   → diventa APK Android con "flet build apk"
-```
+Backend Python per monitorare prezzi di integratori su piu negozi, salvare storico in SQLite e inviare notifiche Telegram su ribassi e target wishlist.
 
----
+## Elevator Pitch
 
-## 1. Deploy Server su Render
+Progetto personale orientato a prodotto reale: scraping periodico, normalizzazione dati, storage storico e API pronte per app mobile.
 
-1. Crea account su https://render.com
-2. Crea un repository GitHub con la cartella `server/`
-3. Su Render: New → Web Service → collega il repo
-4. Render legge `render.yaml` automaticamente
-5. Dopo il deploy copia l'URL (es. https://tracker-integratori.onrender.com)
+## Cosa Fa
 
-> ⚠ Il piano free di Render si "addormenta" dopo 15 min di inattività.
-> Per tenerlo sveglio gratis usa https://uptimerobot.com (ping ogni 5 min).
+- Esegue scraping per categorie e negozi supportati.
+- Salva storico prezzi e rileva variazioni giornaliere.
+- Espone API REST per catalogo, wishlist, grafici e controllo aggiornamenti.
+- Invia notifiche Telegram per flash sale e prezzi target raggiunti.
+- Genera grafici PNG dell'andamento prezzo per prodotto.
 
----
+## Stack Tecnologico
 
-## 2. Configura l'app mobile
+- Python
+- FastAPI
+- APScheduler
+- SQLite
+- BeautifulSoup + requests + curl_cffi
+- Telegram Bot API
+- Deploy su Render
 
-Apri `mobile/main.py` e cambia questa riga con l'URL del tuo server:
-```python
-API_URL = "https://tracker-integratori.onrender.com"  # <-- il tuo URL
-```
+## Architettura (Sintesi)
 
----
+- `scraper.py`: raccolta e parsing prodotti per negozio/categoria.
+- `database.py`: persistenza SQLite, storico prezzi e query di analisi.
+- `app.py`: API FastAPI, scheduler job giornaliero e endpoint amministrativi.
+- `notifiche.py`: integrazione Telegram e comandi bot.
 
-## 3. Build APK Android
+## Endpoint Principali
+
+- `GET /api/prodotti/{negozio}/{categoria}`
+- `GET /api/wishlist`
+- `POST /api/wishlist`
+- `DELETE /api/wishlist`
+- `GET /api/grafico/{negozio}/{nome}?limite=30`
+- `GET|POST /api/aggiorna?secret=...` (admin)
+- `GET|POST /api/telegram/test?secret=...` (admin)
+
+## Sicurezza e Configurazione
+
+- `ADMIN_SECRET` obbligatoria: senza valore l'app non parte.
+- `BULK_API_KEY` opzionale: abilita scraping Bulk; se assente Bulk viene saltato in modo sicuro.
+- Il file SQLite `integratori.db` e runtime-generated e non deve essere versionato.
+
+Variabili d'ambiente principali:
+
+- `ADMIN_SECRET`
+- `BULK_API_KEY`
+- `UPDATE_HOUR`
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID`
+- `TELEGRAM_POLL_SECONDS`
+- `SOGLIA_FLASH_SALE`
+
+## Esecuzione Locale
 
 ```bash
-cd mobile
-pip install flet
-flet build apk
+pip install -r requirements.txt
+uvicorn app:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-L'APK si trova in `build/apk/app-release.apk`.
-Trasferiscilo sul telefono e installalo (abilita "Sorgenti sconosciute" nelle impostazioni).
+## Deploy
 
-> Per iOS serve un Mac con Xcode: `flet build ipa`
+Deploy pensato per Render tramite `render.yaml`.
 
----
+## Nota CV
 
-## 4. Aggiornamento forzato manuale
+Questo progetto dimostra competenze in:
 
-Il server si aggiorna automaticamente ogni giorno alle 03:00.
-Per forzare un aggiornamento manuale:
-```
-POST https://tuo-server.onrender.com/api/aggiorna?secret=LA_TUA_PASSWORD
-```
-La password si trova nelle variabili d'ambiente su Render (ADMIN_SECRET).
-
----
-
-## 5. Bot Telegram (notifiche + comandi)
-
-Imposta su Render queste variabili:
-
-- `TELEGRAM_BOT_TOKEN` = token del bot creato con @BotFather
-- `TELEGRAM_CHAT_ID` = opzionale, chat fissa legacy
-- `TELEGRAM_POLL_SECONDS` = intervallo polling comandi (default `60`)
-- `SOGLIA_FLASH_SALE` = soglia flash in % (default `20`)
-
-Comandi supportati nel bot:
-
-- `/start` abilita notifiche per la chat
-- `/stop` disabilita notifiche
-- `/status` stato database/scraper
-- `/flash` top flash sale
-- `/help` aiuto
-
-Test rapido invio messaggio Telegram:
-
-`POST /api/telegram/test?secret=LA_TUA_PASSWORD&msg=Test%20ok`
-
----
-
-## 6. Grafico prezzi reale (PNG)
-
-Endpoint API:
-
-`GET /api/grafico/{negozio}/{nome}?limite=30`
-
-Esempio:
-
-`https://tuo-server.onrender.com/api/grafico/Tsunami/ISO%20WHEY%20908g`
-
-Restituisce un'immagine PNG con andamento storico del prezzo.
-
----
-
-## Aggiungere Prozis/Bulk/MyProtein
-
-Questi siti usano JavaScript per caricare i prodotti.
-Sul server free non si può usare Selenium.
-Soluzioni:
-- Trovare le loro API JSON interne (come fatto con Tsunami)
-- Usare un server a pagamento con Selenium
+- backend API design
+- scraping e data pipeline leggere
+- schedulazione job e automazione
+- integrazione servizi esterni (Telegram)
+- gestione configurazioni e hardening base sicurezza

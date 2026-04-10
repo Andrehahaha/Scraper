@@ -5,6 +5,7 @@ import random
 import uuid
 import json
 import re
+import os
 from curl_cffi import requests as curl_requests
 
 # ============================================================
@@ -37,7 +38,7 @@ NEGOZI = {
     "Bulk": {
         "colore": "#8BC34A",
         "usa_api": True,  
-        "api_key": "key_nrRcf5OjElUWYRSp",
+        "api_key": os.environ.get("BULK_API_KEY", ""),
         "group_ids": {
             "Proteine in polvere":   "105",
             "Barrette proteiche":    "130",
@@ -98,6 +99,9 @@ def scrapa_bulk_api(categoria: str) -> list:
     cfg = NEGOZI["Bulk"]
     group_id = cfg["group_ids"].get(categoria)
     if not group_id: return []
+    if not cfg.get("api_key"):
+        print("  ⚠ BULK_API_KEY non impostata: scraping Bulk disattivato")
+        return []
 
     prodotti_tutti = []
     page = 1

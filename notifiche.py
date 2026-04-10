@@ -18,6 +18,7 @@ log = logging.getLogger("notifiche")
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 SOGLIA_FLASH = int(os.environ.get("SOGLIA_FLASH_SALE", "20"))
+FLASH_DIGEST_MAX_ITEMS = int(os.environ.get("TELEGRAM_FLASH_DIGEST_MAX_ITEMS", "8"))
 
 _BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
 _OFFSET = 0
@@ -294,6 +295,7 @@ def controlla_flash_sale():
                             WHERE negozio=s.negozio AND nome=s.nome)
         """).fetchall()
 
+    hits = []
     for negozio, nome, vecchio_str, corrente_str, _, link in rows:
         try:
             def parse(s):
@@ -304,17 +306,33 @@ def controlla_flash_sale():
                 continue
             calo_pct = (vecchio - corrente) / vecchio * 100
             if calo_pct >= SOGLIA_FLASH:
-                send_to_all(
-                    f"🚨 <b>Flash Sale!</b>\n"
-                    f"🏪 {negozio}\n"
-                    f"📦 {nome}\n"
-                    f"💰 {corrente_str} (era {vecchio_str})\n"
-                    f"📉 -{round(calo_pct)}% rispetto a ieri"
-                    + (f"\n🔗 {link}" if link else "")
-                )
-                log.info(f"🚨 Flash sale: {nome} -{round(calo_pct)}%")
+                hits.append({
+                    "negozio": negozio,
+                    "nome": nome,
+                    "corrente_str": corrente_str,
+                    "vecchio_str": vecchio_str,
+                    "calo": round(calo_pct),
+                    "link": link,
+                })
         except Exception:
             continue
+
+    if not hits:
+        return
+
+    hits.sort(key=lambda x: x["calo"], reverse=True)
+    top = hits[:max(1, FLASH_DIGEST_MAX_ITEMS)]
+    righe = [f"🚨 <b>Flash Sale ({len(hits)})</b>"]
+    for idx, item in enumerate(top, 1):
+        righe.append(
+            f"{idx}. {item['nome'][:40]} — -{item['calo']}% ({item['corrente_str']})"
+        )
+    extra = len(hits) - len(top)
+    if extra > 0:
+        righe.append(f"… e altri {extra} prodotti")
+
+    send_to_all("\n".join(righe))
+    log.info(f"🚨 Flash sale digest inviato: {len(hits)} prodotti")
 
 
 def esegui_tutti_i_check():

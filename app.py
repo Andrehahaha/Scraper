@@ -28,7 +28,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("tracker")
 
 scheduler    = BackgroundScheduler(daemon=True)
-ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "cambia_questa_password")
+ADMIN_SECRET = os.environ.get("ADMIN_SECRET")
+if not ADMIN_SECRET:
+    raise RuntimeError("ADMIN_SECRET non impostata. Imposta la variabile d'ambiente ADMIN_SECRET.")
 UPDATE_HOUR  = int(os.environ.get("UPDATE_HOUR", "3"))
 FLASH_SOGLIA = int(os.environ.get("FLASH_SOGLIA", "20"))
 TELEGRAM_POLL_SECONDS = int(os.environ.get("TELEGRAM_POLL_SECONDS", "60"))
@@ -72,11 +74,6 @@ def job_giornaliero():
             for c in cfg["categorie"]
         )
         if _notifiche_ok:
-            try:
-                notifiche.controlla_wishlist()
-            except Exception as e:
-                log.warning(f"notifiche wishlist skip: {e}")
-
             try:
                 notifiche.invia_report_aggiornamento(tot_prodotti=tot, flash_count=len(flash))
             except Exception as e:
